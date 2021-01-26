@@ -1,5 +1,9 @@
 const functions = require("firebase-functions");
+const firebase_tools = require("firebase-tools");
 const admin = require("firebase-admin");
+
+const project = process.env.GCLOUD_PROJECT;
+const token = functions.config().ci_token;
 admin.initializeApp();
 
 // Pulls all likes, counts, then pushes to exercise doc with the value under likeCount.
@@ -70,7 +74,9 @@ exports.aggregateExerciseComments = functions.region("australia-southeast1").fir
         const recentComments = [];
 
         querySnapshot.forEach(doc => {
-            recentComments.push( doc.data() );
+            let d = doc.data();
+            d.id = doc.id;
+            recentComments.push(d);
         })
 
         recentComments.splice(5);
@@ -84,4 +90,57 @@ exports.aggregateExerciseComments = functions.region("australia-southeast1").fir
     })
 })
 
+exports.aggregateCommentLikes = functions.region("australia-southeast1").firestore
+    .document("{collectionId}/{documentId}/comments/{commentId}/likes/{likeId}")
+    .onWrite((change, context) => {
     
+    const collectionId = context.params.collectionId;
+    const documentId = context.params.documentId;
+    const commentId = context.params.commentId;
+
+    const docRef = admin.firestore().collection(collectionId).doc(documentId).collection("comments").doc(commentId);
+
+    console.log("This is the collection:", collectionId);
+
+    return docRef.collection("likes").orderBy("createdAt", "desc")
+        .get()
+        .then(querySnapshot => {
+
+        const likeCount = querySnapshot.size;
+        
+        const data = { likeCount }
+        return docRef.update(data);
+    })
+})
+
+
+// path.get().then(doc => {
+    //     if (!doc.exists) {
+    //         console.log("No such document.")
+    //         return res.send("Not found")
+    //     }
+
+    //     if (doc.data().createdBy != context.auth.uid) {
+    //         return res.send("Insufficient permissions.");
+    //     }
+
+    //     console.log("Document found. Now deleting.");
+// })
+    
+// Deleting Exercises and Workouts is too intensive on the client end (as all comments, 
+// likes and follows must be deleted too), so we do it on server side.
+exports.deleteExercise = functions.region("australia-southeast1").runWith({ timeoutSeconds: 540 })
+    .https.onCall((data, context) => {
+        // TODO: Add auth here.
+        const path = data.path;
+        console.log(path.fullPath);
+        console.log("CALLED")
+        
+        return firebase_tools.firestore
+            .delete(path, {
+                project,
+                token,
+                recursive: true,
+                yes: true
+        }).then(() => ({ result: "Deleted successfully." }));
+});
